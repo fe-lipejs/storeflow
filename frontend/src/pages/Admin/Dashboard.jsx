@@ -8,8 +8,48 @@ export default function Dashboard() {
     revenue: 0, pending_orders: 0, lost_money: 0, total_sales: 0
   });
   const [loading, setLoading] = useState(true);
-  
+
   const storeData = JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
+
+  const handleSubscribe = async () => {
+    try {
+      console.log("Chamando o Stripe...");
+
+      // 1. Pega o token EXATO 
+      const token = localStorage.getItem('@SaaS:token');
+
+      // 2. Pega os dados da loja dinamicamente para não mandar o ID errado
+      const storeData = JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
+      const storeId = storeData.id;
+
+      if (!storeId) {
+        alert("Erro: Não foi possível identificar a loja logada.");
+        return;
+      }
+
+      const res = await fetch('http://localhost:3000/api/stripe/create-subscription', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        // Envia o ID real da loja (ex: 6) em vez do número 1 cravado
+        body: JSON.stringify({ store_id: storeId })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.url) {
+        // Sucesso! Vai pro Checkout da Assinatura
+        window.location.href = data.url;
+      } else {
+        console.error("Erro do backend:", data);
+        alert("Erro ao gerar link de pagamento: " + (data.error || "Desconhecido"));
+      }
+    } catch (error) {
+      console.error("Erro na requisição:", error);
+    }
+  };
 
   useEffect(() => {
     // Simula a busca na API que criamos no passo anterior
@@ -28,16 +68,16 @@ export default function Dashboard() {
   return (
     <div className="admin-layout">
       <Sidebar />
-      
+
       <main className="admin-main">
         <div className="admin-content-wrapper">
-          
+
           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '40px' }}>
             <div>
               <h1 style={{ fontSize: '28px', letterSpacing: '-1px', marginBottom: '5px' }}>Visão Geral</h1>
               <p style={{ color: '#666', margin: 0, fontWeight: 500 }}>Acompanhe o desempenho da loja <strong>{storeData.name}</strong></p>
             </div>
-            
+
             {/* O Botão para o lojista ver a própria vitrine dele online */}
             <a href={`/${storeData.slug || 'demo'}`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#f9fafb', color: '#000', padding: '10px 20px', borderRadius: '6px', border: '1px solid #eee', textDecoration: 'none', fontWeight: 600, fontSize: '13px', transition: '0.2s' }}>
               Ver Minha Loja <ExternalLink size={16} />
@@ -50,7 +90,7 @@ export default function Dashboard() {
             <>
               {/* GRID DE MÉTRICAS */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '40px' }}>
-                
+
                 {/* Card Faturamento */}
                 <div className="admin-card" style={{ padding: '30px', margin: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
@@ -111,19 +151,32 @@ export default function Dashboard() {
                     RECUPERAR VENDAS →
                   </button>
                 </div>
-                
+
               </div>
 
               {/* AVISO DE ASSINATURA (Passo 4 UI) */}
-              <div style={{ background: '#000', color: '#fff', padding: '30px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '20px' }}>
-                <div>
-                  <h3 style={{ margin: '0 0 10px', fontSize: '18px', fontWeight: 800 }}>Assinatura MeuSaaS</h3>
-                  <p style={{ margin: 0, color: '#aaa', fontSize: '14px' }}>Sua loja está em período de testes. Assine o Plano Profissional para manter sua loja no ar e continuar vendendo.</p>
+              {/* SÓ MOSTRA O BANNER SE O STATUS NÃO FOR ACTIVE */}
+              {storeData.subscription_status !== 'active' && (
+                <div style={{ background: '#000', color: '#fff', padding: '30px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '20px', marginTop: '30px' }}>
+                  <div style={{ flex: '1 1 300px' }}>
+                    <h3 style={{ margin: '0 0 10px', fontSize: '18px', fontWeight: 800 }}>
+                      {storeData.subscription_status === 'past_due'
+                        ? 'Atenção: Fatura em Atraso'
+                        : 'Assinatura MeuSaaS'}
+                    </h3>
+                    <p style={{ margin: 0, color: '#aaa', fontSize: '14px' }}>
+                      {storeData.subscription_status === 'past_due'
+                        ? 'Seu último pagamento falhou. Atualize sua assinatura imediatamente para não perder o acesso e as regalias da sua loja.'
+                        : 'Sua loja está em período de testes. Assine o Plano Profissional para manter sua loja no ar e continuar vendendo.'}
+                    </p>
+                  </div>
+                  <button onClick={handleSubscribe} className="admin-btn" style={{ background: '#fff', color: '#000', padding: '12px 24px', fontWeight: 'bold', border: 'none', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {storeData.subscription_status === 'past_due'
+                      ? 'Pagar Fatura - R$ 49'
+                      : 'Ativar Plano - R$ 49/mês'}
+                  </button>
                 </div>
-                <button className="admin-btn" style={{ background: '#fff', color: '#000' }}>
-                  Ativar Plano - R$ 49/mês
-                </button>
-              </div>
+              )}
 
             </>
           )}

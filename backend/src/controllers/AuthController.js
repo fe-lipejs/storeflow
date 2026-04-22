@@ -118,7 +118,9 @@ module.exports = {
         store: {
           id: store.id,
           name: store.name,
-          slug: store.slug
+          slug: store.slug,
+          subscription_status: store.subscription_status, 
+          stripe_account_id: store.stripe_account_id      
         },
         token
       });

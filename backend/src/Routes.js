@@ -4,6 +4,8 @@ const multer = require('multer');
 const multerConfig = require('./config/multer');
 const nodemailer = require('nodemailer');
 
+
+
 const StripeController = require('./controllers/StripeController');
 const CustomerOrderController = require('./controllers/CustomerOrderController');
 const CustomerAuthController = require('./controllers/CustomerAuthController');
@@ -94,20 +96,20 @@ routes.post('/checkout/order', async (req, res) => {
 
   try {
     let [customerId] = await trx('customers').insert({
-      store_id, name: customer.name, email: customer.email, 
+      store_id, name: customer.name, email: customer.email,
       phone: customer.phone, address: customer.address
     });
 
     const totalAmount = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
     const [orderId] = await trx('orders').insert({
-      store_id, customer_id: customerId, total_amount: totalAmount, 
+      store_id, customer_id: customerId, total_amount: totalAmount,
       status: 'pending', shipping_method: shipping_method || 'correios'
     });
 
     for (let item of cart) {
       await trx('order_items').insert({
-        order_id: orderId, product_id: item.id, 
+        order_id: orderId, product_id: item.id,
         quantity: item.quantity, price: item.price
       });
     }
@@ -119,21 +121,21 @@ routes.post('/checkout/order', async (req, res) => {
     await trx.commit();
 
     const storeInfo = await db('stores').where({ id: store_id }).first();
-    
+
     if (storeInfo) {
       transporter.sendMail({
         from: `"${storeInfo.name}" <nao-responda@meusaas.com>`,
         to: customer.email,
         subject: `Pedido #${orderId} Confirmado! 🎉`,
         text: `Olá ${customer.name}!\n\nSeu pedido no valor de R$ ${totalAmount.toFixed(2)} foi recebido com sucesso na loja ${storeInfo.name}.`
-      }, (err, info) => { if(info) console.log('\n📧 --- E-MAIL PARA O CLIENTE ENVIADO --- 📧\n'); });
+      }, (err, info) => { if (info) console.log('\n📧 --- E-MAIL PARA O CLIENTE ENVIADO --- 📧\n'); });
 
       transporter.sendMail({
         from: `"MeuSaaS Admin" <sistema@meusaas.com>`,
         to: storeInfo.email,
         subject: `🤑 Nova Venda Realizada! (Pedido #${orderId})`,
         text: `Parabéns!\n\nNova venda no valor de R$ ${totalAmount.toFixed(2)}.\nCliente: ${customer.name}`
-      }, (err, info) => { if(info) console.log('\n💰 --- E-MAIL PARA O LOJISTA ENVIADO --- 💰\n'); });
+      }, (err, info) => { if (info) console.log('\n💰 --- E-MAIL PARA O LOJISTA ENVIADO --- 💰\n'); });
     }
 
     res.status(201).json({ order_id: orderId, message: 'Pedido finalizado!' });
@@ -154,7 +156,7 @@ routes.get('/customer/orders', safe(CustomerOrderController.listOrders));
 
 routes.post('/checkout/create-payment-intent', safe(StripeController.createPaymentIntent));
 // Rota que o Stripe vai chamar (Webhook)
-routes.post('/webhooks/stripe', express.raw({type: 'application/json'}), StripeController.webhook);
+routes.post('/webhooks/stripe', express.raw({ type: 'application/json' }), StripeController.webhook);
 
 
 // ==========================================
@@ -178,7 +180,7 @@ routes.post('/checkout', safe(PaymentController.createSubscription));
 // Dashboard (Métricas Financeiras do Lojista)
 routes.get('/stores/:storeId/dashboard', async (req, res) => {
   const { storeId } = req.params;
-  
+
   // Segurança
   if (parseInt(storeId) !== req.storeId) return res.status(403).json({ error: 'Sem permissão' });
 
@@ -212,15 +214,20 @@ routes.get('/stores/:storeId/dashboard', async (req, res) => {
       .first();
     const totalSales = totalSalesQuery.total_sales || 0;
 
+    const storeInfo = await db('stores').where({ id: storeId }).first();
+
     res.json({
       revenue: parseFloat(totalRevenue),
       pending_orders: parseInt(pendingOrders),
       lost_money: parseFloat(lostMoney),
-      total_sales: parseInt(totalSales)
+      total_sales: parseInt(totalSales),
+      subscription_status: storeInfo.subscription_status,
+      stripe_account_id: storeInfo.stripe_account_id
     });
-  } catch (error) { 
+
+  } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Erro ao carregar dashboard financeiro' }); 
+    res.status(500).json({ error: 'Erro ao carregar dashboard financeiro' });
   }
 });
 
@@ -240,7 +247,6 @@ routes.delete('/categories/:id', async (req, res) => {
   res.json({ message: 'Apagada' });
 });
 
-// ❌ FOI AQUI QUE O NODE TRAVOU (Linha 181). Agora com o safe(), ele está protegido.
 routes.post('/products', safe(ProductController.store));
 
 routes.get('/stores/:storeId/products', async (req, res) => {
@@ -253,7 +259,7 @@ routes.get('/stores/:storeId/products', async (req, res) => {
 routes.put('/products/:id', async (req, res) => {
   const { name, description, price, promo_price, category_id, images, variations, is_featured } = req.body;
   await db('products').where({ id: req.params.id }).update({
-    name, description, price, promotional_price: promo_price || null, category_id: category_id || null, 
+    name, description, price, promotional_price: promo_price || null, category_id: category_id || null,
     images: images ? JSON.stringify(images) : null, variations: variations || null, is_featured: is_featured || false
   });
   res.json({ message: 'Atualizado!' });
@@ -273,7 +279,7 @@ routes.get('/orders/:id/items', async (req, res) => {
 // Buscar todos os pedidos de uma loja específica (Admin)
 routes.get('/stores/:storeId/orders', async (req, res) => {
   const { storeId } = req.params;
-  
+
   if (parseInt(storeId) !== req.storeId) return res.status(403).json({ error: 'Sem permissão' });
 
   try {
@@ -282,7 +288,7 @@ routes.get('/stores/:storeId/orders', async (req, res) => {
       .leftJoin('customers', 'orders.customer_id', 'customers.id')
       .where({ 'orders.store_id': storeId })
       .orderBy('orders.id', 'desc');
-      
+
     res.json(orders);
   } catch (error) {
     console.error(error);
@@ -314,5 +320,15 @@ routes.get('/stores/:storeId/orders', async (req, res) => {
 
 // Master
 routes.get('/master/dashboard', safe(SuperAdminController.getMasterDashboard));
+
+// ==========================================
+// ROTAS FINANCEIRAS DO LOJISTA (STRIPE)
+// ==========================================
+routes.post('/stripe/create-subscription', safe(StripeController.createSubscription));
+routes.post('/stripe/create-connect-account', safe(StripeController.createConnectAccount));
+// PORTAIS DE AUTOATENDIMENTO
+routes.post('/stripe/create-portal-session', safe(StripeController.createPortalSession));
+routes.post('/stripe/create-connect-login-link',safe(StripeController.createConnectLoginLink));
+
 
 module.exports = routes;

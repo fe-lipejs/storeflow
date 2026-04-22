@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Admin/Dashboard';
+import Configuracoes from './pages/Admin/Configuracoes';
 import Appearance from './pages/Admin/Appearance';
 import Products from './pages/Admin/Products';
 import Orders from './pages/Admin/Orders';
@@ -59,6 +60,7 @@ function App() {
         <Route path="/admin/produtos" element={<PrivateRoute><Products /></PrivateRoute>} />
         <Route path="/admin/pedidos" element={<PrivateRoute><Orders /></PrivateRoute>} />
         <Route path="/admin/master" element={<PrivateRoute><MasterDashboard /></PrivateRoute>} />
+        <Route path="/admin/configuracoes" element={<PrivateRoute><Configuracoes /></PrivateRoute>} />
 
         {/* Rota Dinâmica da Vitrine (Cliente Final) - Fica por último! */}
         <Route path="/:slug" element={<Storefront />} />
