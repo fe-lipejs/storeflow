@@ -6,54 +6,75 @@ export default function ConfiguracoesFinanceiras() {
     const [loadingConnect, setLoadingConnect] = useState(false);
     const [loadingSubscribe, setLoadingSubscribe] = useState(false);
 
-    const [storeData, setStoreData] = useState({});
+    // 1. Inicia com os dados do cache para a tela não piscar vazia
+    const [storeData, setStoreData] = useState(() => {
+        return JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
+    });
 
-    useEffect(() => {
-        const data = JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
-        setStoreData(data);
-    }, []);
-
-    const syncStoreData = async (currentStore) => {
+    // 2. FUNÇÃO RADAR: Busca a verdade absoluta no banco de dados silenciosamente
+    const fetchFreshData = async () => {
         try {
             const token = localStorage.getItem('@SaaS:token');
+            const currentStore = JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
+
             const res = await fetch(`http://localhost:3000/api/stores/${currentStore.id}/dashboard`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
 
             if (res.ok) {
-                const updatedDataFromDB = await res.json();
-                const newStoreData = { ...currentStore, ...updatedDataFromDB };
-                localStorage.setItem('@SaaS:store', JSON.stringify(newStoreData));
-                setStoreData(newStoreData);
+                const updatedData = await res.json();
+                
+                // Mescla os dados forçando a atualização exata do que veio do banco
+                const newData = { 
+                    ...currentStore, 
+                    subscription_status: updatedData.subscription_status,
+                    stripe_account_id: updatedData.stripe_account_id
+                };
+                
+                localStorage.setItem('@SaaS:store', JSON.stringify(newData));
+                setStoreData(newData); // Atualiza a tela automaticamente
             }
         } catch (error) {
-            console.error("Erro ao sincronizar:", error);
+            console.error("Erro ao buscar dados frescos:", error);
         }
     };
 
+    // 3. RODA SEMPRE QUE ENTRAR NA PÁGINA
     useEffect(() => {
+        // Busca os dados reais na hora (acaba com a necessidade de deslogar)
+        fetchFreshData();
+
+        // Lida com os alertas se estiver vindo do Stripe
         const urlParams = new URLSearchParams(window.location.search);
         const connectSuccess = urlParams.get('connect');
         const paymentStatus = urlParams.get('payment');
-        const currentStore = JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
 
         if (connectSuccess === 'success') {
-            alert("🎉 Conta Bancária conectada com sucesso!");
-            syncStoreData(currentStore);
-            window.history.replaceState({}, document.title, window.location.pathname);
+            alert("🎉 Conta Bancária configurada com sucesso!");
         }
 
         if (paymentStatus === 'success') {
-            alert("🚀 Pagamento aprovado! Seu Plano Profissional está ativo.");
-            syncStoreData(currentStore);
-            window.history.replaceState({}, document.title, window.location.pathname);
+            alert("🚀 Processando pagamento! Em instantes seu plano estará ativo.");
+            // O Radar varre o banco a cada 3 segundos (máximo 3 vezes) para dar tempo do Webhook do Stripe chegar
+            let tries = 0;
+            const interval = setInterval(() => {
+                fetchFreshData();
+                tries++;
+                if (tries >= 3) clearInterval(interval);
+            }, 3000);
+        } else if (paymentStatus === 'cancel') {
+            alert("⚠️ O pagamento foi cancelado. Você precisa assinar para manter a loja ativa.");
         }
 
-        if (paymentStatus === 'cancel') {
-            alert("⚠️ O pagamento foi cancelado. Você precisa assinar para manter a loja ativa.");
+        // Limpa a URL pra ficar bonita (tira os ?payment=success)
+        if (window.location.search) {
             window.history.replaceState({}, document.title, window.location.pathname);
         }
     }, []);
+
+    // ==========================================
+    // FUNÇÕES DE CLIQUE (INTACTAS)
+    // ==========================================
 
     const handleManageSubscription = async () => {
         setLoadingSubscribe(true);
@@ -131,6 +152,10 @@ export default function ConfiguracoesFinanceiras() {
         }
     };
 
+    // ==========================================
+    // SEU DESIGN CENTRALIZADO (INTACTO)
+    // ==========================================
+
     return (
         <div className="admin-layout">
             <Sidebar />
@@ -138,10 +163,8 @@ export default function ConfiguracoesFinanceiras() {
             <main className="admin-main">
                 <div className="admin-content-wrapper">
                     
-                    {/* Limitador de largura para não esticar demais e margin 0 auto para centralizar */}
                     <div style={{ maxWidth: '900px', margin: '0 auto', padding: '20px 0' }}>
                         
-                        {/* CABEÇALHO CENTRALIZADO */}
                         <header style={{ marginBottom: '50px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                             <h1 style={{ fontSize: '32px', letterSpacing: '-1px', marginBottom: '8px', fontWeight: 900 }}>Configurações</h1>
                             <p style={{ color: '#666', margin: 0, fontWeight: 500, fontSize: '15px' }}>Gerencie as finanças e a assinatura da sua plataforma.</p>
@@ -149,20 +172,16 @@ export default function ConfiguracoesFinanceiras() {
 
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '40px' }}>
 
-                            {/* CARD 1: RECEBIMENTOS (CONNECT) */}
+                            {/* CARD 1: RECEBIMENTOS */}
                             <div className="admin-card" style={{ padding: '40px 30px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', height: '100%' }}>
-                                
                                 <div style={{ background: '#eff6ff', color: '#2563eb', padding: '16px', borderRadius: '16px', marginBottom: '20px' }}>
                                     <Wallet size={32} />
                                 </div>
-                                
                                 <h2 style={{ fontSize: '20px', fontWeight: 800, margin: '0 0 5px' }}>Receber Pagamentos</h2>
                                 <p style={{ fontSize: '14px', color: '#666', margin: '0 0 25px' }}>Configuração da sua conta bancária</p>
-
                                 <p style={{ fontSize: '14px', color: '#555', lineHeight: '1.6', marginBottom: '35px', maxWidth: '320px' }}>
                                     Conecte sua conta via Stripe para receber o valor das suas vendas automaticamente. Sem essa configuração, seus clientes não conseguirão finalizar compras por cartão ou PIX.
                                 </p>
-
                                 <div style={{ marginTop: 'auto', width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {storeData.stripe_account_id ? (
                                         <>
@@ -186,23 +205,19 @@ export default function ConfiguracoesFinanceiras() {
                                 </div>
                             </div>
 
-                            {/* CARD 2: ASSINATURA (BILLING) */}
+                            {/* CARD 2: ASSINATURA */}
                             <div className="admin-card" style={{ padding: '40px 30px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', height: '100%', border: storeData.subscription_status?.trim().toLowerCase() === 'active' ? '1px solid #eee' : '2px solid #000' }}>
-                                
                                 <div style={{ background: '#f8fafc', color: '#000', padding: '16px', borderRadius: '16px', border: '1px solid #eee', marginBottom: '20px' }}>
                                     <CreditCard size={32} />
                                 </div>
-                                
                                 <h2 style={{ fontSize: '20px', fontWeight: 800, margin: '0 0 5px' }}>Plano MeuSaaS</h2>
                                 <p style={{ fontSize: '14px', color: '#666', margin: '0 0 25px' }}>Mensalidade da sua loja virtual</p>
-
                                 <div style={{ marginBottom: '35px' }}>
                                     <div style={{ fontSize: '28px', fontWeight: 900, marginBottom: '8px' }}>R$ 49,00 <span style={{ fontSize: '14px', color: '#999', fontWeight: 500 }}>/mês</span></div>
                                     <p style={{ fontSize: '14px', color: '#555', lineHeight: '1.6', margin: '0 auto', maxWidth: '280px' }}>
                                         Acesso ilimitado à vitrine, gestão de pedidos e suporte.
                                     </p>
                                 </div>
-
                                 <div style={{ marginTop: 'auto', width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {(storeData.subscription_status?.trim().toLowerCase() === 'active') ? (
                                         <>
