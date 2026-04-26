@@ -20,14 +20,14 @@ module.exports = {
       }
 
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(total_amount * 100), 
+        amount: Math.round(total_amount * 100),
         currency: 'brl',
         payment_method_types: ['card', 'boleto'],
         transfer_data: {
           destination: store.stripe_account_id, // O dinheiro vai pro lojista
         },
         metadata: {
-          order_id: order_id.toString(), 
+          order_id: order_id.toString(),
           customer_email: customer.email
         }
       });
@@ -40,7 +40,8 @@ module.exports = {
   },
 
   // ==============================================================
-  // 2. WEBHOOK (Onde o Stripe avisa que o dinheiro caiu)
+  // 2. WEBHOOK PRINCIPAL (Mensalidades e Vendas de Produtos)
+  // Escuta a porta: /api/webhooks/stripe
   // ==============================================================
   async webhook(req, res) {
     const sig = req.headers['stripe-signature'];
@@ -49,69 +50,93 @@ module.exports = {
     try {
       event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
     } catch (err) {
-      console.error('❌ Erro de Assinatura no Webhook:', err.message);
+      console.error('❌ Erro de Assinatura no Webhook Principal:', err.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // ---> FLUXO A: PAGAMENTO DE PRODUTO (O cliente da loja pagou)
+    console.log(`\n🔔 NOVO EVENTO RECEBIDO (Webhook Principal): ${event.type}`);
+
+    // ---> FLUXO A: PAGAMENTO DE PRODUTO (Venda na Vitrine)
     if (event.type === 'payment_intent.succeeded') {
       const paymentIntent = event.data.object;
       const orderId = paymentIntent.metadata?.order_id;
 
-      // Trava: Se não tem orderId, é a assinatura do lojista, então ignora esse bloco.
       if (!orderId) {
-        console.log('🔄 [SaaS] Pagamento de assinatura detectado no fluxo de produtos. Ignorando...');
+        console.log('🔄 [Ignorado] Não é um produto da vitrine.');
       } else {
         try {
           await db('orders').where({ id: orderId }).update({ payment_status: 'pago', status: 'pago' });
-
           const order = await db('orders').where({ id: orderId }).first();
           const customer = await db('customers').where({ id: order.customer_id }).first();
           const store = await db('stores').where({ id: order.store_id }).first();
           const items = await db('order_items').where({ order_id: orderId })
             .join('products', 'order_items.product_id', 'products.id')
-            .select('order_items.*', 'products.name as product_name'); 
+            .select('order_items.*', 'products.name as product_name');
 
           if (store && customer) {
             const emailHtml = OrderTemplate(order, customer, store, items);
             await EmailService.sendOrderConfirmation(customer.email, emailHtml);
           }
-          console.log(`✅ SUCESSO: Pedido #${orderId} pago com sucesso! E-mail enviado.`);
+          console.log(`✅ SUCESSO: Pedido #${orderId} da vitrine foi pago!`);
         } catch (dbError) {
-          console.error('❌ Erro ao processar banco de dados no Webhook (Produtos):', dbError);
+          console.error('❌ Erro ao processar banco (Produtos):', dbError);
         }
       }
     }
 
-    // ---> FLUXO B: ASSINATURA DO LOJISTA (O lojista pagou a sua mensalidade)
-    if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
-      const subscription = event.data.object;
-      const customerId = subscription.customer; 
-      const status = subscription.status; // 'active', 'past_due', etc.
+    // ---> FLUXO B: ASSINATURA CRIADA (O lojista acabou de pagar o checkout)
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
 
-      try {
-        await db('stores')
-          .where({ stripe_customer_id: customerId })
-          .update({
-            subscription_status: status,
-            subscription_id: subscription.id
-          });
-        console.log(`🚀 [SaaS] Assinatura da Loja atualizada para: ${status.toUpperCase()}`);
-      } catch (err) {
-        console.error('❌ Erro ao atualizar status da assinatura:', err);
+      if (session.mode === 'subscription') {
+        const storeId = session.client_reference_id;
+
+        console.log(`\n--- 🔍 ATIVANDO NOVA ASSINATURA ---`);
+        console.log(`ID da Loja: ${storeId}`);
+        console.log(`ID do Cliente Stripe: ${session.customer}`);
+
+        if (storeId) {
+          try {
+            await db('stores').where({ id: storeId }).update({
+              subscription_status: 'active',
+              stripe_customer_id: session.customer,
+              subscription_id: session.subscription
+            });
+            console.log(`🚀 [SaaS] Loja ID ${storeId} ATIVADA com sucesso no banco!`);
+          } catch (err) {
+            console.error('❌ Erro no MySQL ao ativar assinatura:', err);
+          }
+        }
       }
     }
 
-    // ---> FLUXO C: CANCELAMENTO DE ASSINATURA
+    // ---> FLUXO C: RENOVAÇÃO / ATRASO DE PAGAMENTO
+    if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data.object;
+
+      console.log(`\n--- 🔄 ATUALIZAÇÃO DE STATUS DA ASSINATURA ---`);
+      console.log(`Novo Status: ${subscription.status}`);
+
+      try {
+        await db('stores')
+          .where({ stripe_customer_id: subscription.customer })
+          .update({ subscription_status: subscription.status });
+        console.log(`🚀 [SaaS] Status atualizado para: ${subscription.status.toUpperCase()}`);
+      } catch (err) {
+        console.error('❌ Erro ao atualizar status de renovação:', err);
+      }
+    }
+
+    // ---> FLUXO D: CANCELAMENTO DE ASSINATURA
     if (event.type === 'customer.subscription.deleted') {
       const subscription = event.data.object;
       try {
         await db('stores')
           .where({ stripe_customer_id: subscription.customer })
           .update({ subscription_status: 'canceled' });
-        console.log(`💀 [SaaS] Assinatura cancelada definitivamente.`);
+        console.log(`💀 [SaaS] Assinatura cancelada definitivamente para o cliente: ${subscription.customer}`);
       } catch (err) {
-        console.error('❌ Erro ao cancelar assinatura:', err);
+        console.error('❌ Erro ao cancelar assinatura no MySQL:', err);
       }
     }
 
@@ -119,7 +144,83 @@ module.exports = {
   },
 
   // ==============================================================
-  // 3. GERAR LINK DO CONNECT (Para o lojista configurar a conta bancária dele)
+  // 2.5 WEBHOOK CONNECT (Exclusivo para os Lojistas / Subcontas)
+  // Escuta a porta: /api/webhooks/stripe-connect
+  // ==============================================================
+  async webhookConnect(req, res) {
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+      // ⚠️ ATENÇÃO: USA A SENHA DO NOVO WEBHOOK DO CONNECT!
+      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET_CONNECT);
+      // Dentro do seu webhookConnect, logo após o event = stripe.webhooks.constructEvent...
+
+      console.log('--------------------------------------------');
+      console.log('📩 EVENTO RECEBIDO:', event.type);
+      const account = event.data.object;
+      console.log('🆔 ID DA CONTA NO WEBHOOK:', account.id);
+      console.log('📝 DADOS SUBMETIDOS (details_submitted):', account.details_submitted);
+
+      if (event.type === 'account.updated') {
+        // Verifique se o seu IF está exatamente assim:
+        if (account.details_submitted) {
+          try {
+            const rowsAffected = await db('stores')
+              .where({ stripe_account_id: account.id })
+              .update({ onboarded: 1 });
+
+            console.log('🔢 LINHAS AFETADAS NO BANCO:', rowsAffected);
+
+            if (rowsAffected === 0) {
+              console.log('⚠️ AVISO: Nenhuma loja encontrada com esse stripe_account_id no banco!');
+            } else {
+              console.log('✅ SUCESSO: Banco atualizado!');
+            }
+          } catch (error) {
+            console.error('❌ ERRO NO UPDATE:', error);
+          }
+        } else {
+          console.log('ℹ️ A conta foi atualizada, mas os detalhes ainda não foram totalmente submetidos.');
+        }
+      }
+      console.log('--------------------------------------------');
+    } catch (err) {
+      console.error('❌ Erro de Assinatura no Webhook Connect:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    console.log(`\n🔗 NOVO EVENTO DO CONNECT RECEBIDO: ${event.type}`);
+
+    // ---> FLUXO E: FINALIZAÇÃO DA CONTA BANCÁRIA
+    if (event.type === 'account.updated') {
+      const account = event.data.object;
+
+      console.log(`\n--- 🏦 ANALISANDO CONTA CONNECT ---`);
+      console.log(`ID da Conta: ${account.id}`);
+      console.log(`Detalhes submetidos? ${account.details_submitted}`);
+      console.log(`Cobranças ativadas? ${account.charges_enabled}`);
+
+      // Liberamos o onboarded se ele submeteu os detalhes OU se o Stripe já ativou as cobranças
+      if (account.details_submitted || account.charges_enabled) {
+        try {
+          await db('stores')
+            .where({ stripe_account_id: account.id })
+            .update({ onboarded: 1 });
+          console.log(`✅ [SaaS] O Lojista terminou de configurar a conta bancária! Banco atualizado para 1.`);
+        } catch (err) {
+          console.error('❌ Erro ao atualizar onboarded no banco:', err);
+        }
+      } else {
+        console.log(`⚠️ A conta conectou, mas o cadastro no Stripe ainda está incompleto.`);
+      }
+    }
+
+    res.json({ received: true });
+  },
+
+  // ==============================================================
+  // 3. GERAR LINK DO CONNECT (Para o lojista configurar a conta bancária)
   // ==============================================================
   async createConnectAccount(req, res) {
     const { store_id } = req.body;
@@ -133,8 +234,8 @@ module.exports = {
       if (!accountId) {
         const account = await stripe.accounts.create({
           type: 'express',
-          country: 'BR', 
-          email: store.email, 
+          country: 'BR',
+          email: store.email,
         });
         accountId = account.id;
         await db('stores').where({ id: store_id }).update({ stripe_account_id: accountId });
@@ -167,8 +268,8 @@ module.exports = {
       let stripeCustomerId = store.stripe_customer_id;
       if (!stripeCustomerId) {
         const customer = await stripe.customers.create({
-          email: store.email, 
-          name: store.name, 
+          email: store.email,
+          name: store.name,
           metadata: { store_id: store.id }
         });
         stripeCustomerId = customer.id;
@@ -185,8 +286,7 @@ module.exports = {
         mode: 'subscription',
         success_url: `${frontendUrl}/admin/configuracoes?payment=success`,
         cancel_url: `${frontendUrl}/admin/configuracoes?payment=cancel`,
-        // Garante que o Stripe saiba qual loja está pagando
-        client_reference_id: store_id.toString(), 
+        client_reference_id: store_id.toString(),
       });
 
       return res.json({ url: session.url });
@@ -204,7 +304,7 @@ module.exports = {
     try {
       const store = await db('stores').where({ id: store_id }).first();
       const session = await stripe.billingPortal.sessions.create({
-        customer: store.stripe_customer_id, 
+        customer: store.stripe_customer_id,
         return_url: `${frontendUrl}/admin/configuracoes`,
       });
       return res.json({ url: session.url });

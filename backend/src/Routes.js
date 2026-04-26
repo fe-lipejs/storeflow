@@ -4,8 +4,6 @@ const multer = require('multer');
 const multerConfig = require('./config/multer');
 const nodemailer = require('nodemailer');
 
-
-
 const StripeController = require('./controllers/StripeController');
 const CustomerOrderController = require('./controllers/CustomerOrderController');
 const CustomerAuthController = require('./controllers/CustomerAuthController');
@@ -155,8 +153,6 @@ routes.post('/customer/verify-otp', safe(CustomerAuthController.verifyOtp));
 routes.get('/customer/orders', safe(CustomerOrderController.listOrders));
 
 routes.post('/checkout/create-payment-intent', safe(StripeController.createPaymentIntent));
-// Rota que o Stripe vai chamar (Webhook)
-routes.post('/webhooks/stripe', express.raw({ type: 'application/json' }), StripeController.webhook);
 
 
 // ==========================================
@@ -222,7 +218,8 @@ routes.get('/stores/:storeId/dashboard', async (req, res) => {
       lost_money: parseFloat(lostMoney),
       total_sales: parseInt(totalSales),
       subscription_status: storeInfo.subscription_status,
-      stripe_account_id: storeInfo.stripe_account_id
+      stripe_account_id: storeInfo.stripe_account_id,
+      onboarded: storeInfo.onboarded 
     });
 
   } catch (error) {

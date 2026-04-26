@@ -6,12 +6,12 @@ export default function ConfiguracoesFinanceiras() {
     const [loadingConnect, setLoadingConnect] = useState(false);
     const [loadingSubscribe, setLoadingSubscribe] = useState(false);
 
-    // 1. Inicia com os dados do cache para a tela não piscar vazia
+    // Inicia com os dados do cache
     const [storeData, setStoreData] = useState(() => {
         return JSON.parse(localStorage.getItem('@SaaS:store') || '{}');
     });
 
-    // 2. FUNÇÃO RADAR: Busca a verdade absoluta no banco de dados silenciosamente
+    // RADAR: Busca a verdade no banco de dados silenciosamente
     const fetchFreshData = async () => {
         try {
             const token = localStorage.getItem('@SaaS:token');
@@ -24,38 +24,42 @@ export default function ConfiguracoesFinanceiras() {
             if (res.ok) {
                 const updatedData = await res.json();
                 
-                // Mescla os dados forçando a atualização exata do que veio do banco
+                // Mescla os dados pegando AGORA o onboarded também
                 const newData = { 
                     ...currentStore, 
                     subscription_status: updatedData.subscription_status,
-                    stripe_account_id: updatedData.stripe_account_id
+                    stripe_account_id: updatedData.stripe_account_id,
+                    onboarded: updatedData.onboarded // <-- O SEGREDO ESTÁ AQUI
                 };
                 
                 localStorage.setItem('@SaaS:store', JSON.stringify(newData));
-                setStoreData(newData); // Atualiza a tela automaticamente
+                setStoreData(newData); 
             }
         } catch (error) {
             console.error("Erro ao buscar dados frescos:", error);
         }
     };
 
-    // 3. RODA SEMPRE QUE ENTRAR NA PÁGINA
     useEffect(() => {
-        // Busca os dados reais na hora (acaba com a necessidade de deslogar)
         fetchFreshData();
 
-        // Lida com os alertas se estiver vindo do Stripe
         const urlParams = new URLSearchParams(window.location.search);
         const connectSuccess = urlParams.get('connect');
         const paymentStatus = urlParams.get('payment');
 
         if (connectSuccess === 'success') {
             alert("🎉 Conta Bancária configurada com sucesso!");
+            // Se voltou do Stripe Connect, dá uns segundos pro webhook processar e busca de novo
+            let tries = 0;
+            const interval = setInterval(() => {
+                fetchFreshData();
+                tries++;
+                if (tries >= 3) clearInterval(interval);
+            }, 3000);
         }
 
         if (paymentStatus === 'success') {
             alert("🚀 Processando pagamento! Em instantes seu plano estará ativo.");
-            // O Radar varre o banco a cada 3 segundos (máximo 3 vezes) para dar tempo do Webhook do Stripe chegar
             let tries = 0;
             const interval = setInterval(() => {
                 fetchFreshData();
@@ -66,15 +70,10 @@ export default function ConfiguracoesFinanceiras() {
             alert("⚠️ O pagamento foi cancelado. Você precisa assinar para manter a loja ativa.");
         }
 
-        // Limpa a URL pra ficar bonita (tira os ?payment=success)
         if (window.location.search) {
             window.history.replaceState({}, document.title, window.location.pathname);
         }
     }, []);
-
-    // ==========================================
-    // FUNÇÕES DE CLIQUE (INTACTAS)
-    // ==========================================
 
     const handleManageSubscription = async () => {
         setLoadingSubscribe(true);
@@ -152,9 +151,8 @@ export default function ConfiguracoesFinanceiras() {
         }
     };
 
-    // ==========================================
-    // SEU DESIGN CENTRALIZADO (INTACTO)
-    // ==========================================
+    // AVALIA SE TEM CONTA CONECTADA E SE O ONBOARDED ESTÁ CONCLUÍDO
+    const isConnectComplete = storeData.stripe_account_id && (Number(storeData.onboarded) === 1 || storeData.onboarded === true);
 
     return (
         <div className="admin-layout">
@@ -173,7 +171,7 @@ export default function ConfiguracoesFinanceiras() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '40px' }}>
 
                             {/* CARD 1: RECEBIMENTOS */}
-                            <div className="admin-card" style={{ padding: '40px 30px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', height: '100%' }}>
+                            <div className="admin-card" style={{ padding: '40px 30px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', height: '100%', border: isConnectComplete ? '1px solid #eee' : '2px solid #000' }}>
                                 <div style={{ background: '#eff6ff', color: '#2563eb', padding: '16px', borderRadius: '16px', marginBottom: '20px' }}>
                                     <Wallet size={32} />
                                 </div>
@@ -183,7 +181,9 @@ export default function ConfiguracoesFinanceiras() {
                                     Conecte sua conta via Stripe para receber o valor das suas vendas automaticamente. Sem essa configuração, seus clientes não conseguirão finalizar compras por cartão ou PIX.
                                 </p>
                                 <div style={{ marginTop: 'auto', width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {storeData.stripe_account_id ? (
+                                    
+                                    {/* AQUI APLICAMOS A NOVA REGRA DE ONBOARDED */}
+                                    {isConnectComplete ? (
                                         <>
                                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', color: '#16a34a', fontWeight: 700, fontSize: '14px', background: '#f0fdf4', padding: '15px', borderRadius: '8px' }}>
                                                 <CheckCircle size={20} /> Conta Bancária Conectada
@@ -196,10 +196,10 @@ export default function ConfiguracoesFinanceiras() {
                                         <button
                                             onClick={handleConnectStripe}
                                             disabled={loadingConnect}
-                                            className="admin-btn"
+                                            className="admin-btn admin-btn-black"
                                             style={{ width: '100%', justifyContent: 'center', gap: '10px', padding: '16px' }}
                                         >
-                                            {loadingConnect ? 'Processando...' : 'Configurar Recebimentos'} <ArrowRight size={18} />
+                                            {loadingConnect ? 'Processando...' : (storeData.stripe_account_id ? 'Continuar Configuração' : 'Configurar Recebimentos')} <ArrowRight size={18} />
                                         </button>
                                     )}
                                 </div>
